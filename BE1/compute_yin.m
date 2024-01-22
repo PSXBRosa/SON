@@ -91,9 +91,9 @@ for i = 1:length(timeScale)
     pitch = tau;  # rename variable for clarity
 
     # save results
-    [min_val, min_idx] = min(cmdf);
+    [min_val, min_idx] = min(cmdf(1:end-1));
     if min_idx > tau_min
-        argmins(i) = sr / min_idx;
+        argmins(i) = timeScale(i) + min_idx;
     end
 
     if pitch != 0  # A pitch was found
