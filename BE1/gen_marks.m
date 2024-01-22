@@ -4,8 +4,10 @@ pkg load signal
 audio_file_path = "effacer.wav";
 text_file_path = "effacer.txt";
 
-[y, fs] = audioread(audio_file_path);
-ts = 0:1/fs:(length(y)*(1/fs))-(1/fs);
+[sig, sr] = audioread(audio_file_path);
+sig = int16(sig * intmax('int16'));  # convert to int16
+
+ts = 0:1/sr:(length(sig)*(1/sr))-(1/sr);
 
 # load ground truth
 marks = []; % samplestamps
@@ -18,21 +20,43 @@ if text_file_path != " "
   marks = content{1};
   flags = content{2};
 
-  fclose(text_file_path);
+  fclose(fileID);
 end;
 
-[pks idx] = findpeaks(y, "DoubleSided");
+### chap 1 - find f0 using YIN: http://audition.ens.fr/adc/pdf/2002_JASA_YIN.pdf ###
+# step 1: calculate the autocorrelation signal
+[pitches, harmonic_rates, argmins, times] = compute_yin(sig, sr);
 
-figure;
-grid on;
+duration = length(sig)/sr;
+
+% Plotting Audio data
+ax1 = subplot(4, 1, 1);
+t1 = linspace(0, duration, numel(sig));
+plot(t1, sig);
+title(ax1, 'Audio data');
+ylabel(ax1, 'Amplitude');
+
+% Plotting F0
+ax2 = subplot(4, 1, 2);
+t2 = linspace(0, duration, numel(pitches));
+plot(t2, pitches);
+title(ax2, 'F0');
+ylabel(ax2, 'Frequency (Hz)');
+
+% Plotting Markings
+ax3 = subplot(4, 1, 3);
+t1 = linspace(0, duration, numel(sig));
+plot(t1, sig);
 hold on;
-samples = 1:length(y);
-plot(samples, y, samples(idx), y(idx), 'or');
-for i=1:length(marks)
-    if (flags(i)==1)
-      plot([marks(i) marks(i)],[-1 1],'r');
-    else
-      plot([marks(i) marks(i)],[-1 1],'k');
-    end;
-end;
+argmins = argmins(argmins!=0);
+markings = sig(argmins)
+scatter(argmins, markings)
+title(ax3, 'Markings');
+ylabel(ax3, 'Amplitude');
 hold off;
+
+
+
+% Display the plot
+axis tight;
+linkaxes([ax1, ax2, ax3, ax4], 'x');
