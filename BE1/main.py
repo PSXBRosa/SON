@@ -8,7 +8,7 @@ import soundfile as sf
 import argparse
 import matplotlib.pyplot as plt
 
-def find_marks(sig, sr, min_hz=65, max_hz=2093, frame_length=2048,  win_length=None, hop_length=None, lookup_rad=0.005,
+def find_marks(sig, sr, min_hz=65, max_hz=2093, frame_length=1600,  win_length=None, hop_length=None, lookup_rad=0.0025,
                plot = False):
     """
     Generates the markings for the PSOLA algorithm. The frame detection is done
@@ -53,38 +53,37 @@ def find_marks(sig, sr, min_hz=65, max_hz=2093, frame_length=2048,  win_length=N
             frame_length=frame_length,
             win_length=win_length,
             hop_length=hop_length,
-            fill_na=min_hz,
             sr=sr,
-            switch_prob=0.3,
-            resolution=0.05,
+            fill_na=min_hz,
+            switch_prob=0.5,
+            resolution=0.03,
     )
 
     # period window (in samples) per frame
     t0s = 1/f0s * sr
 
-    lookup_rad = lookup_rad * sr  # radius in samples
-    samples = librosa.frames_to_samples(t0s, hop_length=hop_length)
+    lookup_rad = int(lookup_rad * sr)  # radius in samples
+    samples = librosa.frames_to_samples([_ for _ in range(1, len(f0s) + 1)], hop_length=hop_length)
+    sig_t = np.linspace(0, len(sig)/sr, len(sig))
 
-    # FIXME some peaks are being skipped
-    peaks = []
-    t_start = 0
-    for idx, frame_len in enumerate(samples[1:]):
-        t_end = t_start + frame_len
+    peaks = [np.argmax(sig[:samples[0]])]
+    t_start, t_last = 0, peaks[-1]
+    for idx, (t_end, voiced) in enumerate(zip(samples[1:], voiced_flag[1:])):
         curr_period = t0s[idx+1]
-        n = 0
-        while (mark_expected_pos := t_start + n*curr_period) < t_end:
+        while (mark_expected_pos := t_last + curr_period) < min(t_end, len(sig)):
             lower_bound = int(max(mark_expected_pos - lookup_rad, 0))
             upper_bound = int(min(mark_expected_pos + lookup_rad, len(sig)))
             peak_search_slice = sig[lower_bound: upper_bound]
-            if len(peak_search_slice) > 0:
+            if len(peak_search_slice) > 0 and voiced:
                 peaks.append(
                     lower_bound + np.argmax(peak_search_slice)
                 )
-            n += 1
+            else:
+                peaks.append(int(mark_expected_pos))
+            t_last = peaks[-1]
         t_start = t_end
 
     marks = np.array(peaks)
-    sig_t = np.linspace(0, len(sig)/sr, len(sig))
     times = librosa.times_like(f0s, sr=sr, hop_length=hop_length)
     if plot:
         fig, (ax1, ax2) = plt.subplots(2, 1, sharex=True)
