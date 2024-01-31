@@ -8,7 +8,8 @@ import soundfile as sf
 import argparse
 import matplotlib.pyplot as plt
 
-def find_marks(sig, sr, min_hz=110, max_hz=660, frame_length=2048,  win_length=None, hop_length=None, lookup_rad=0.005):
+def find_marks(sig, sr, min_hz=65, max_hz=2093, frame_length=2048,  win_length=None, hop_length=None, lookup_rad=0.005,
+               plot = False):
     """
     Generates the markings for the PSOLA algorithm. The frame detection is done
     using the YIN frequency estimation algorithm.
@@ -29,8 +30,11 @@ def find_marks(sig, sr, min_hz=110, max_hz=660, frame_length=2048,  win_length=N
             Length of the window for calculating autocorrelation in samples.
         hop_length: int
             Number of audio samples between adjacent YIN predictions.
-        lookup_rad:
-            Radius for the marking position search around the frequency detected by the YIN algorithm.
+        lookup_rad: float
+            Radius for the marking position search around the frequency detected by the YIN algorithm in seconds.
+        plot: bool
+            Whether or not to generate a plot of the markings
+
     Returns:
         peaks: nd.array
             The markings for the PSOLA algorithm.
@@ -49,36 +53,58 @@ def find_marks(sig, sr, min_hz=110, max_hz=660, frame_length=2048,  win_length=N
             frame_length=frame_length,
             win_length=win_length,
             hop_length=hop_length,
-            sr=sr
+            fill_na=min_hz,
+            sr=sr,
+            switch_prob=0.3,
+            resolution=0.05,
     )
-    f0s[np.isnan(f0s)] = min_hz  # set period for unvoiced windows
 
     # period window (in samples) per frame
     t0s = 1/f0s * sr
 
-    low, upp = 1 - lookup_rad, 1 + lookup_rad   # lookup deviation
-    peaks = [np.argmax(sig[:int(t0s[0]*1.1)])]  # first peak
-    n_frames = len(f0s)
-    while True:
-        prev = peaks[-1]
-        idx = max(np.floor((prev - frame_length + hop_length) / (hop_length)).astype(int), 0)  # current frame idx
+    lookup_rad = lookup_rad * sr  # radius in samples
+    samples = librosa.frames_to_samples(t0s, hop_length=hop_length)
 
-        # if next frame would be outside of the timeframe, we stop the computation
-        if prev + int(t0s[idx] * upp) > len(sig):
-            break
+    # FIXME some peaks are being skipped
+    peaks = []
+    t_start = 0
+    for idx, frame_len in enumerate(samples[1:]):
+        t_end = t_start + frame_len
+        curr_period = t0s[idx+1]
+        n = 0
+        while (mark_expected_pos := t_start + n*curr_period) < t_end:
+            lower_bound = int(max(mark_expected_pos - lookup_rad, 0))
+            upper_bound = int(min(mark_expected_pos + lookup_rad, len(sig)))
+            peak_search_slice = sig[lower_bound: upper_bound]
+            if len(peak_search_slice) > 0:
+                peaks.append(
+                    lower_bound + np.argmax(peak_search_slice)
+                )
+            n += 1
+        t_start = t_end
 
-        # window in which we'll look for the highest peak
-        lookup_range = sig[prev + int(t0s[idx] * low): prev + int(t0s[idx] * upp)]
-        if len(lookup_range) < 1:
-            peaks.append(
-                    prev + int(t0s[idx])
-            )
-            continue
+    marks = np.array(peaks)
+    sig_t = np.linspace(0, len(sig)/sr, len(sig))
+    times = librosa.times_like(f0s, sr=sr, hop_length=hop_length)
+    if plot:
+        fig, (ax1, ax2) = plt.subplots(2, 1, sharex=True)
+        time_stamps = np.linspace(0, len(sig)/sr, len(sig))
+        ax1.scatter(time_stamps[marks], sig[marks], color="red")
+        ax1.set_title(f"{args.file} with psola markings")
+        ax1.set_ylabel("Amplitude")
+        ax1.plot(sig_t, sig)
+        ax2.plot(times, f0s)
+        ax2.set_xlabel("Time (s)")
 
-        peaks.append(
-                prev + int(t0s[idx] * low) + np.argmax(lookup_range)
-        )
-    return np.array(peaks)
+        fig, ax = plt.subplots()
+        D = librosa.amplitude_to_db(np.abs(librosa.stft(sig)), ref=np.max)
+        img = librosa.display.specshow(D, x_axis='time', y_axis='log', ax=ax)
+        fig.colorbar(img, ax=ax, format="%+2.f dB")
+        ax.plot(times, f0s, label='f0', color='cyan', linewidth=3)
+        ax.set(title='pYIN fundamental frequency estimation')
+        ax.legend(loc='upper right')
+
+    return times, marks
 
 
 def shift(sig, marks, ratio, window_func):
@@ -139,23 +165,16 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(prog='main.py')
     parser.add_argument('-f', '--file', default="effacer.wav")
     parser.add_argument('--window', default="linear")
-    parser.add_argument('--ratios', type=int, nargs="*")
+    parser.add_argument('--plot-markings', action='store_true')
+    parser.add_argument('--ratios', type=float, default=[], nargs="*")
     args = parser.parse_args()
 
     sig, sr = librosa.load(args.file)
-    marks = find_marks(sig, sr)
+    times, marks = find_marks(sig, sr, plot=args.plot_markings)
 
-    plt.figure(1)
-    time_stamps = np.linspace(0, len(sig)/sr, len(sig))
-    plt.scatter(time_stamps[marks], sig[marks], color="red")
-    plt.title(f"{args.file} with psola markings")
-    plt.ylabel("Amplitude")
-    plt.xlabel("Time (s)")
-    plt.plot(time_stamps, sig, '--')
-
-    plt.figure(2)
+    plt.figure()
     for ratio in args.ratios:
-        new_sig =  shift(sig, marks, ratio, windows[args.window])
+        new_sig =  shift(sig,  marks, ratio, windows[args.window])
         new_time_stamps = np.linspace(0, len(new_sig)/sr, len(new_sig))
 
         plt.title(f"{args.file} scaled")
