@@ -9,7 +9,7 @@ import argparse
 import matplotlib.pyplot as plt
 
 def find_marks(sig, sr, min_hz=65, max_hz=2093, frame_length=1600,  win_length=None, hop_length=None, lookup_rad=0.0025,
-               plot = False):
+               plot_markings=False, plot_yin_contour=False):
     """
     Generates the markings for the PSOLA algorithm. The frame detection is done
     using the YIN frequency estimation algorithm.
@@ -32,8 +32,10 @@ def find_marks(sig, sr, min_hz=65, max_hz=2093, frame_length=1600,  win_length=N
             Number of audio samples between adjacent YIN predictions.
         lookup_rad: float
             Radius for the marking position search around the frequency detected by the YIN algorithm in seconds.
-        plot: bool
+        plot_markings: bool
             Whether or not to generate a plot of the markings
+        plot_yin_contour: bool
+            Whether or not to generate a plot of the yin frequency contour
 
     Returns:
         peaks: nd.array
@@ -85,7 +87,7 @@ def find_marks(sig, sr, min_hz=65, max_hz=2093, frame_length=1600,  win_length=N
 
     marks = np.array(peaks)
     times = librosa.times_like(f0s, sr=sr, hop_length=hop_length)
-    if plot:
+    if plot_markings:
         fig, (ax1, ax2) = plt.subplots(2, 1, sharex=True)
         time_stamps = np.linspace(0, len(sig)/sr, len(sig))
         ax1.scatter(time_stamps[marks], sig[marks], color="red")
@@ -94,7 +96,7 @@ def find_marks(sig, sr, min_hz=65, max_hz=2093, frame_length=1600,  win_length=N
         ax1.plot(sig_t, sig)
         ax2.plot(times, f0s)
         ax2.set_xlabel("Time (s)")
-
+    if plot_yin_contour:
         fig, ax = plt.subplots()
         D = librosa.amplitude_to_db(np.abs(librosa.stft(sig)), ref=np.max)
         img = librosa.display.specshow(D, x_axis='time', y_axis='log', ax=ax)
@@ -156,32 +158,45 @@ def shift(sig, marks, ratio, window_func):
     return new_sig
 
 windows = {
-        "linear": lambda dl, dr: np.concatenate((np.linspace(0, 1, dl + 1)[1:], np.linspace(1, 0, dr + 1)[1:]))
+        "linear": lambda dl, dr: np.concatenate((np.linspace(0, 1, dl + 1)[1:], np.linspace(1, 0, dr + 1)[1:])),
+        "hanning": lambda dl, dr: np.hanning(dl + dr),
+        "sine": lambda dl, dr: np.sin(np.linspace(0, np.pi, dl + dr)),
+        "hamming": lambda dl, dr: np.hamming(dl + dr)
 }
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(prog='main.py')
-    parser.add_argument('-f', '--file', default="effacer.wav")
-    parser.add_argument('--window', default="linear")
-    parser.add_argument('--plot-markings', action='store_true')
-    parser.add_argument('--ratios', type=float, default=[], nargs="*")
+    parser.add_argument('-f', '--file', default="effacer.wav", help="source .wav file")
+    parser.add_argument('--window', choices=windows.keys(), default="linear", help="overlap window type")
+    parser.add_argument('--plot-markings', action='store_true', help="if set, will display the markings plot")
+    parser.add_argument('--plot-yin-contour', action='store_true', help="if set, will display the frequency contour plot")
+    parser.add_argument('--plot-sig-comparison', action='store_true', help="if set, will display the changed signal plot")
+    parser.add_argument('--ratios', type=float, default=[], nargs="*", help="list of ratios by which the signal will be shifted")
     args = parser.parse_args()
 
     sig, sr = librosa.load(args.file)
-    times, marks = find_marks(sig, sr, plot=args.plot_markings)
+    times, marks = find_marks(
+            sig, sr,
+            plot_markings=args.plot_markings,
+            plot_yin_contour=args.plot_yin_contour
+    )
 
-    plt.figure()
+    if args.plot_sig_comparison:
+        plt.figure()
     for ratio in args.ratios:
         new_sig =  shift(sig,  marks, ratio, windows[args.window])
         new_time_stamps = np.linspace(0, len(new_sig)/sr, len(new_sig))
 
-        plt.title(f"{args.file} scaled")
-        plt.ylabel("Amplitude")
-        plt.xlabel("Time (s)")
+        if args.plot_sig_comparison:
+            plt.title(f"{args.file} scaled")
+            plt.ylabel("Amplitude")
+            plt.xlabel("Time (s)")
+            plt.plot(new_time_stamps, new_sig, label=f"ratio: {ratio}")
 
-        plt.plot(new_time_stamps, new_sig, label=f"ratio: {ratio}")
         if ratio != 1:
-            sf.write(f"{args.file}-{ratio}.wav", new_sig, sr, format="wav", subtype='PCM_24')
-    plt.legend()
-    plt.show()
+            sf.write(f"{args.file}-{ratio}-{args.window}.wav", new_sig, sr, format="wav", subtype='PCM_24')
+
+    if args.plot_sig_comparison:
+        plt.legend()
+        plt.show()
